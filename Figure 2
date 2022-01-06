@@ -1,0 +1,373 @@
+#################################################################################
+#== Exploring differences in neoantigen properties in B07 patients            ==#
+#== Figure.2a, b,c, d & Supp Fig.2a                                           ==#
+#== Author: Benjamin S. Simpson                                               ==#
+#== R version 4.1.0 (2021-05-18)                                              ==#
+#################################################################################
+
+# Figure 1a: B07 supertype representitive motif is available at:
+# https://services.healthtech.dtu.dk/service.php?NetMHCpan-4.1
+
+# Figure 2B: Overall change in proline count across all neoantigens vs supertype binding afifnity
+# Libraries
+library(readr)
+library(tidyr)
+library(stringr)
+library(dplyr)
+library(ggplot2)
+
+# Working directory
+setwd("C:/Users/bensi/OneDrive/Documents/Cancer Institute job/HLA supertypes/Data_analysis/Neoantigenes_CPI1000_NETMHCpan/Ben_netMHC/Pan/All")
+
+# read in Neoantigens file
+Neoantigen <- read_csv("Neoantigens_CPI1000_master.csv")
+
+# Merge with clinical data (Merged master sheet)
+Merged_master <- read_csv("~/Cancer Institute job/HLA supertypes/Data_analysis/Merged_master_file_definition_2.csv")
+MM <- Merged_master[,c(2,49,55:57,61:87)]
+MM$Patient <- sub('..', '', MM$Patient)
+
+# Change in rank binding by supertype
+# create a column which shows change in rank binding from WT to Mu
+# Positive value means an increase in binding after mutation ()
+Neoantigen$HLA.rank.change <- Neoantigen$HLA.rank_mutant-Neoantigen$HLA.rank_wildtype
+
+# count Ps in WT and Mutant neoantigens
+Neoantigen$P_count_MU <- str_count(Neoantigen$Peptide_mutant, "P")
+Neoantigen$P_count_WT <- str_count(Neoantigen$Peptide_wildtype , "P")
+
+# Calculate change
+Neoantigen$P_change <- Neoantigen$P_count_MU-Neoantigen$P_count_WT
+
+# aggregate counts per patient to give overall change in proline content of neantigen repetoire
+Neoantigen_counts<- select(Neoantigen, Patient, HLA.rank.change, P_change, L_change, Supertype)
+Letter_counts<- aggregate(.~Patient+Supertype,Neoantigen_counts, FUN=sum)
+names(Letter_counts)[1] <- "Patient" # rename
+names(Letter_counts)[3] <- "Rank_shift" # rename
+count.v.NMD <- merge(MM, Letter_counts, by="Patient", all.x=TRUE) # combine data
+
+# scatterplot, define colour pallette
+Gradient_cols <- c("B07" = "#502A43",
+                   "A03"="#392F48",
+                   "A02"="#1C344D",
+                   "B44"="#235965",
+                   "A01"="#297D7D",
+                   "B27"="#5EA175",
+                   "A24"="#92C46D",
+                   "B08"="#ACD36F",
+                   "B62"="#C6E170",
+                   "B58"="#E3F0B8")
+
+# Remove unclassified supertypes, NAs and those with mutiple supertype properties
+count.v.NMD <- subset(count.v.NMD, count.v.NMD$Supertype != "U" & count.v.NMD$Supertype != "NA" & count.v.NMD$Supertype != "A01/A24" & count.v.NMD$Supertype != "A01/A03")
+
+# Plot figure 2b
+Fig2b <- ggplot(count.v.NMD, aes(y=1-Rank_shift, x=P_change, color=Supertype, fill=Supertype)) + # ylim(0, 1) +
+  geom_point(size = 2,alpha = .4) + geom_smooth(method = "gam") + theme_classic() + theme(text = element_text(size=5)) + scale_color_manual(values=c(Gradient_cols))+ scale_fill_manual(values=c(Gradient_cols))+ xlab("Change in proline count") + ylab("Change in binding affinity")+ labs(fill = "Supertype")#+ theme(legend.position = "none")
+Fig2b
+
+# save as pdf
+ggsave(
+  "Proline_count_by_binding_affinity_change.pdf",
+  plot = Fig2b,
+  path = NULL,
+  scale = 1,
+  width = 75,
+  height = 70,
+  units = "mm",
+  dpi = 300)
+
+#################################################
+# Figure 2c
+# Calculate P2 Pro change between mutation types
+# Get the AA at the P2 anchor positions for all WT and Mu peptides
+Neoantigen$P2_anchor_Mu <- substr(Neoantigen$Peptide_mutant, 2, 2)
+Neoantigen$P2_anchor_WT <- substr(Neoantigen$Peptide_wildtype, 2, 2)
+
+# Count whether the P2 position contains a Pro
+Neoantigen$P2_P_count_MU <- str_count(Neoantigen$P2_anchor_Mu, "P")
+Neoantigen$P2_P_count_WT <- str_count(Neoantigen$P2_anchor_WT, "P")
+#Calculate the change between mutation
+Neoantigen$P2_P_change <- Neoantigen$P2_P_count_MU-Neoantigen$P2_P_count_WT
+
+# Change mutation type into a dichotomous Indel or SNV/DNV type
+Neoantigen$mut.two.group <- ifelse(Neoantigen$mut.type == "ins" | Neoantigen$mut.type == "del","Indel",
+                                   ifelse(Neoantigen$mut.type == "snv" | Neoantigen$mut.type == "dnv","SNV/DNV","NA"))
+# simplify data to include only relevant columns
+Neoantigen_counts<- select(Neoantigen,Patient,P2_P_change,P2_P_count_WT,P2_P_count_MU, mut.two.group)
+# Aggregate all counts by patient and mutation type
+Letter_counts<- aggregate(.~Patient+mut.two.group,Neoantigen_counts, FUN=mean)
+
+library(viridis)
+
+# Compare the degree of P2 Pro change between mutation types
+Fig2c <-Letter_counts %>%
+  ggplot(aes(x=Letter_counts$mut.two.group, y=log2(Letter_counts$P2_P_change), fill=mut.two.group)) +
+  geom_violin(width=0.9) +
+  geom_boxplot(width=0.1, color="black", alpha=0.2) +
+  scale_fill_manual(values=c("#CF9384","#643544")) +
+  ggtitle("") + ylab("Log2( P2P change )") +
+  xlab("Mutation type") + theme_classic() +theme(legend.position= "NULL")
+
+Fig2c
+
+# save the plot as a pdf
+ggsave(
+  "P2P_by_Mutation.pdf",
+  plot = Fig2c,
+  path = NULL,
+  scale = 1,
+  width = 75,
+  height = 70,
+  units = "mm",
+  dpi = 300)
+
+#################################
+# Fig2d and suppleentary Fig2a
+
+# Libaries
+library(ggplotify)
+library(stringr)
+library(dplyr)
+library("Hmisc")
+library(readr)
+library(patchwork)
+library(viridis)
+
+# setwd
+setwd("C:/Users/bensi/OneDrive/Documents/Cancer Institute job/HLA supertypes/Data_analysis/Neoantigenes_CPI1000_NETMHCpan/Ben_netMHC/Pan/All")
+
+# read in neoantigens file
+Neoantigen <- read_csv("Neoantigen_with_AA_shift_master.csv")
+Neoantigen_
+# Fig2d - proportion of neoantigens which are indels by supertype
+# graph percentages of neoantigens which are indels ####
+Neoantigens_by_supertype_prop <- read_csv("~/Cancer Institute job/HLA supertypes/Data_analysis/Neoantigenes_CPI1000_NETMHCpan/Neoantigens_by_supertype_proportion_of_supertype_antigen.csv")
+Neoantigens_by_supertype_prop <- subset(Neoantigens_by_supertype_prop,Neoantigens_by_supertype_prop$Supertype != "U" & Neoantigens_by_supertype_prop$Supertype != "Average")
+Neoantigens_by_supertype_prop$B07 <- as.factor(ifelse(Neoantigens_by_supertype_prop$Supertype == "B07","B07","Other"))
+
+# plot figure
+Fig2d <- ggplot(Neoantigens_by_supertype_prop, aes(x=reorder(Neoantigens_by_supertype_prop$Supertype,`Indel/total`), y=`Indel/total`, fill=B07))+
+  geom_bar(stat="identity")+
+  scale_fill_manual(values=c("#62997A", "#1C344D")) +
+  theme_classic() + 
+  theme(text = element_text(size=7),axis.text.y = element_text(angle = 0, hjust = 1),axis.text.x = element_text(angle = 45, hjust = 1)) + ylab("Indel proportion") + xlab("")
+
+Fig2d
+
+# save as PDF
+# Setwd()
+setwd("C:/Users/bensi/OneDrive/Documents/Cancer Institute job/HLA supertypes/For publication/HD Images/PDF figures")
+ggsave(
+  "Proportion_of_neoantigens_which_are_indel.pdf",
+  plot = Fig2A,
+  device = pdf,
+  path = NULL,
+  scale = 1,
+  width = 75,
+  height = 70,
+  units = "mm",
+  dpi = 300)
+
+# Plot absolute % of AA content per neoantigen by mutation type
+AA_counts <- select(Neoantigen, Patient, G_count_MU, A_count_MU, V_count_MU, L_count_MU, I_count_MU, P_count_MU, F_count_MU, Y_count_MU, W_count_MU, S_count_MU, T_count_MU, C_count_MU, M_count_MU, N_count_MU, Q_count_MU, D_count_MU, E_count_MU, K_count_MU, R_count_MU, H_count_MU,mut.type, Peptide.length)
+AA_counts$mut.two.group <- ifelse(AA_counts$mut.type == "snv" | AA_counts$mut.type == "dnv", "Nucleotide_var","Indel")
+AA_counts <- AA_counts[,-22] # remove old column
+AA_props <- AA_counts[,2:21]/AA_counts$Peptide.length # proportion of each AA
+AA_props <- cbind(AA_props, AA_counts[,c(1,23)])
+Counts_melted <- melt(AA_props) # restructure for plotting
+Counts_melted$value <- as.numeric(Counts_melted$value) # format column
+AA_Average <- Counts_melted %>% dplyr::group_by(mut.two.group, variable) %>% dplyr::summarise(mean = mean(value), n = n())
+
+# Calculate standard error
+AA_Average.SE <- Counts_melted %>% 
+  group_by(mut.two.group, variable) %>%
+  summarise_each(funs(mean,sd,se=sd(.)/sqrt(n())))
+
+AA_Average.SE$value_mean <- AA_Average.SE$value_mean*100
+AA_Average.SE$value_se <- AA_Average.SE$value_se*100
+
+# absolute difference
+AA_av_Indel<- subset(AA_Average, mut.two.group == "Indel")
+AA_av_NV<- subset(AA_Average, mut.two.group != "Indel")
+AA_av_long <- merge(AA_av_Indel,AA_av_NV, by="variable")
+AA_av_long$Count_difference <- (AA_av_long$mean.x - AA_av_long$mean.y)*100
+AA_av_long$Highest_count <- ifelse(AA_av_long$Count_difference >= "0","Higher in Indel","Higher in SNV/DNV")
+
+# Assign AA labels
+Labels <- c("L_count_MU" = "Leucine", "S_count_MU"="Serine","A_count_MU"="Alanine","P_count_MU"="Proline","V_count_MU"="Valine","T_count_MU"="Threonine","F_count_MU"="Phenylalanine","R_count_MU"="Arginine","I_count_MU"="Isoleucine","G_count_MU"="Glycine","K_count_MU"="Lycine","E_count_MU"="Glutamate","M_count_MU"="Methionine","Q_count_MU"="Glutamate","Y_count_MU"="Tyrosine","H_count_MU"="Histidine","W_count_MU"="Tryptophan","N_count_MU"="Asparagine","C_count_MU"="Cysteine","D_count_MU"="Aspartate")
+
+# Plot supplementary figure 2a
+SuppFig2a <-ggplot(AA_av_long, aes(x=reorder(variable,-Count_difference), y=Count_difference, fill=Highest_count))+
+  geom_bar(position ="dodge", stat="identity")+
+  scale_fill_manual(values=c("#CF9384","#643544"),name = "Highest AA count", labels = c("Higher in Indel", "Higher in SNV/DNV")) +
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size=7),legend.position = "right") + ylab("% AA change (Indel - SNV/DNV)") + scale_x_discrete(labels=Labels) + xlab("") #legend.position = "none",
+
+# save as pdf
+ggsave(
+  "Percentage_change_in_AA_by_mutation_type.pdf",
+  plot = SuppFig2a,
+  path = NULL,
+  scale = 1,
+  width = 140,
+  height = 65,
+  units = "mm",
+  dpi = 300)
+
+#################################################################################
+#== Comparing TAP binding scores between mutation type and B07 status         ==#
+#== Figure.2e, Supp Fig.2b and e                                              ==#
+#== Author: Benjamin S. Simpson                                               ==#
+#== R version 4.1.0 (2021-05-18)                                              ==#
+#################################################################################
+
+# libraries
+library(readr)
+library(seqinr)
+library(dplyr)
+library(stringr)
+library(readxl)
+library(ggplot2)
+library(DescTools)
+library(ggpubr)
+
+# load neoantigen file
+# set working directory
+setwd("C:/Users/bensi/OneDrive/Documents/Cancer Institute job/HLA supertypes/Data_analysis/Neoantigenes_CPI1000_NETMHCpan/Ben_netMHC/Pan/All")
+# read in neoantigen file
+Neoantigen <- read_csv("Neoantigen_with_AA_shift_master.csv")
+
+##### TAP larger study ####
+setwd("C:/Users/bensi/OneDrive/Documents/Cancer Institute job/HLA supertypes/Data_analysis/Neoantigenes_CPI1000_NETMHCpan/Ben_netMHC/Pan/All/TAP predictions/RawCTL processed")
+file_paths <- list.files(, pattern = ".xls", full.names = TRUE)
+file_paths <- gsub("./","",file_paths)
+
+#assuming tab separated values with a header    
+datalist = lapply(file_paths,read_delim,"\t",col_names = T) 
+
+#assuming the same header/columns for all files
+datafr = do.call("rbind", datalist) 
+
+# 
+Neoantigen_data <- subset(datafr, datafr$N != "N")
+
+# need to change allele format to meerge with supertype sheet: A*0101
+# currently 	HLA-A*02:02
+allele <- Neoantigen_data$Allele
+allele_list_formatted <- gsub("HLA-","", allele) # remove prefix
+allele_list_formatted_2 <- gsub(":", "", allele_list_formatted)
+Neoantigen_data$Allele_v2 <- allele_list_formatted_2
+
+# read in conversion sheet:
+Supertypes <- read_excel("~/Cancer Institute job/HLA supertypes/Conversion of HLA alleles to supertype.xlsx")
+
+names(Supertypes)[2] <- "Allele_v2"
+# merge
+Neoantigen_data <- merge(Neoantigen_data, Supertypes[,1:4], by="Allele_v2", all.x=TRUE)
+
+# combine with mutation type
+library(data.table)
+Neo_data <- as.data.frame(select(Neoantigen, Patient, mut.type, Supertype, L_count_MU, P_count_MU, Peptide_mutant))
+setDT(Neoantigen_data)
+names(Neoantigen_data)[4] <- "Peptide_mutant"
+names(Neoantigen_data)[3] <- "Patient"
+setDT(Neo_data)
+
+# Combine TAP scores and neoantigen data
+TAP_mutations <- merge(Neoantigen_data, Neo_data, by=c("Peptide_mutant","Patient"), all.x=TRUE,allow.cartesian=TRUE)
+TAP_mutations <- left_join(TAP_scores, Neo_data, by="Patient")
+
+#### TAP scores by supertype ####
+# remove NA values, Unclassified supertypes and supertypes with multiple properties
+TAP_mutations <- subset(TAP_mutations, TAP_mutations$mut.type != "NA" & TAP_mutations$Supertype.x != "Unclassified" & TAP_mutations$Supertype.x != "A01 A24")
+TAP_mutations$TAP <- as.numeric(TAP_mutations$TAP) # format TAP scores
+
+# Create dichotomous B07 for B07 homozygosity
+TAP_mutations$B07 <- ifelse(TAP_mutations$Supertype.x == "B07","B07","Other")
+
+# Break neoantigens into those which bind or do not bind TAP
+TAP_mutations$Greater_than_zero <- ifelse(TAP_mutations$TAP >= 0 ,"Positive","Negative")
+
+# Table numbers of positive and negative binders by supertype and mutation type
+x <- as.data.frame(table(TAP_mutations$Greater_than_zero,TAP_mutations$B07,TAP_mutations$mut.type))
+z <- subset(x, x$Var1 == "Negative") # select only TAP-negative binders
+colnames(z) <- c("Var.1","Var2.1","Var3.1","Freq.1") # rename
+y <- subset(x, x$Var1 == "Positive") # select only TAP-positive binders
+XYZ <- cbind(z,y) # horzontally bind dfs
+XYZ$Proportion_negative <- XYZ$Freq.1 / (XYZ$Freq+XYZ$Freq.1) # calculate proportion
+XYZ$Total <- XYZ$Freq.1 + XYZ$Freq # calculate totals
+
+# Calculate CIs
+# initialize with NA values
+XYZ$Upper_CI <- NA
+XYZ$Lower_CI <- NA
+
+# calculate confidence intervals for proportions
+CIs <- as.data.frame(BinomCI(XYZ$Freq.1, XYZ$Total,conf.level = 0.95, method = "clopper-pearson"))
+XYZ <- cbind(XYZ,CIs) # add
+
+# Plot proportion of TAP-negative neoantigens by mutation type and B07 status
+Supp2c <- ggplot(XYZ, aes(x=reorder(Var2, -Proportion_negative ), y=Proportion_negative , fill=reorder(Var3,-Proportion_negative )))+
+  geom_bar(stat="identity",position="dodge")+
+  scale_fill_manual(values=c("#CFA283","#CE8484","#A05461","#271627"), name = "Mutation type", labels = c("Insertion","Deletion","SNV","DNV")) +
+  theme_classic() + 
+  theme(text = element_text(size=7), axis.text.y = element_text(angle = 0, hjust = 1), axis.text.x = element_text(angle = 0, hjust = 1)) + ylab("Proportion of TAP-negative neoantigens") + xlab("Supertype")+
+  geom_errorbar(aes(ymin=lwr.ci, ymax=upr.ci), width=.2,
+                position=position_dodge(.9))
+Supp2c
+
+# save plot as PDF
+ggsave(
+  "Proportion_negative_TAP_score.pdf",
+  plot = Supp2c,
+  path = NULL,
+  scale = 1,
+  width = 81,
+  height = 44,
+  units = "mm",
+  dpi = 300)
+
+# For simplicity plot indels only:
+Indel_only <- subset(XYZ, XYZ$Var3.1 == "ins" | XYZ$Var3.1 == "del")
+
+# Figure 2e
+Fig2e <- ggplot(Indel_only, aes(x=reorder(Var2, -Proportion_negative ), y=Proportion_negative , fill=reorder(Var3,-Proportion_negative )))+
+  geom_bar(stat="identity",position="dodge")+
+  scale_fill_manual(values=c("#CFA283","#CE8484","#A05461","#271627"), name = "Mutation type", labels = c("Insertion","Deletion","SNV","DNV")) +
+  theme_classic() + 
+  theme(text = element_text(size=7), axis.text.y = element_text(angle = 0, hjust = 1), axis.text.x = element_text(angle = 0, hjust = 1)) + ylab("Proportion of TAP-negative neoantigens") + xlab("Supertype")+
+  geom_errorbar(aes(ymin=lwr.ci, ymax=upr.ci), width=.2,
+                position=position_dodge(.9))
+Fig2e
+
+# save plot as PDF
+ggsave(
+  "Proportion_negative_TAP_score_Indel_only.pdf",
+  plot = Fig2e,
+  path = NULL,
+  scale = 1,
+  width = 81,
+  height = 44,
+  units = "mm",
+  dpi = 300)
+
+# Determine TAP score for epitopes with and without p2 pro
+TAP_mutations$P2_AA <- substr(TAP_mutations$Peptide_mutant, 2, 2)
+TAP_mutations$P2_Pro <- ifelse(TAP_mutations$P2_AA == "P","P2 Pro","No P2 Pro")
+
+SuppFig2c <- ggplot(TAP_mutations, aes(x=P2_Pro, y=TAP, fill=P2_Pro)) +
+  geom_violin(trim=FALSE,)+
+  geom_boxplot(width=0.2,size=1) + theme_classic() + scale_fill_manual(values=c("#757D88","#735569"))
+SuppFig2c
+
+# save graph
+ggsave(
+  "TAP_scores_by_P2_PRO.pdf",
+  plot = SuppFig2c,
+  path = NULL,
+  scale = 1,
+  width = 120,
+  height = 80,
+  units = "mm",
+  dpi = 300)
