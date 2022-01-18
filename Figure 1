@@ -5,6 +5,638 @@
 #== R version 4.1.0 (2021-05-18)                                         ==#
 ############################################################################
 
+#### Discovery of supertype and mutational signature interactions in CPI1000+ cohort  ####
+
+# About the analysis:
+# Uses Non-mutally exclusive heterozygous definitions to call supertype
+# systematicaly creates a series of models, assessing the interaction term between a given supertype and mutational signature
+# This analysis also uses tumour type as a covariate to adjust the interaction term for the effect of tumour type on CPI response
+
+##### set-up ####
+# Libraries
+library(readr)
+library(data.table)
+library(fuzzyjoin)
+library(tidyverse)
+library(stringr)
+
+# read in merged master file with CPI response and tumour types
+setwd("C:/Users/bensi/OneDrive/Documents/Cancer Institute job/HLA supertypes/Data_analysis")
+Merged_master <- read_csv("Merged_master_file_definition_2.csv")
+
+# Simplyfy dataset for logistic regression analysis
+# selecting patients with RECIST response data, specified 'include in analysis and has a HLA_A and HLA_B designation
+pan_cancer_data <- subset(Merged_master, Include_in_analysis=="Y"&Response_responder!="NA"&HLA_A1!="NA"&HLA_A2!="NA"&HLA_B1!="NA"&HLA_B2!="NA") #Include_in_analysis=="Y"&
+
+# select columns for logistic regression
+Pan_c_log_reg <- pan_cancer_data %>% select(Response_responder, A1_Supertype, A2_Supertype,	B1_Supertype,	B2_Supertype,	Supertype_A01, Supertype_A01_A03,	Supertype_A02,	Supertype_A03,	Supertype_A24,	Supertype_B07,	Supertype_B08, Supertype_B27,	Supertype_B44,	Supertype_B58,	Supertype_B62,	TMB,	Indel_TMB, NMD_escape_TMB, Signature.1A,	Signature.1B,	Signature.2,	Signature.3,	Signature.4,	Signature.5,	Signature.6,	Signature.7,	Signature.8,	Signature.9,	Signature.10,	Signature.11,	Signature.12,	Signature.13,	Signature.14,	Signature.15,	Signature.16,	Signature.17,	Signature.18,	Signature.19,	Signature.20,	Signature.21,	Tum_Type)
+
+#  make binary RECIST response as in Litchfield et al., 2020
+Pan_c_log_reg$RECIST_binary <- ifelse(Pan_c_log_reg$Response_responder == "response","1","0")
+
+# drop original response column
+Pan_c_log_reg <- Pan_c_log_reg[,-1]
+
+# format columns
+cols.fac <- c(1:15,41) # create vector for columns to be factors
+Pan_c_log_reg[cols.fac] <- sapply(Pan_c_log_reg[cols.fac],as.factor) # Make factors
+Pan_c_log_reg$RECIST_binary <- as.factor(Pan_c_log_reg$RECIST_binary)
+
+cols.num <- c(16:40) # vector for numeric variables
+Pan_c_log_reg[cols.num] <- sapply(Pan_c_log_reg[cols.num],as.numeric) # Make numeric
+
+Pan_c_log_reg$Tum_Type <- as.factor(Pan_c_log_reg$Tum_Type)
+CPI1000_Tumour_type <- as.data.frame(table(Pan_c_log_reg$Tum_Type))
+
+## Modelling ####
+# define variables
+signatures <- Pan_c_log_reg[,c(16,17,19:40)] # new df with columns for COSMIC signatures
+varlist <- names(signatures) # vector containing all variable names to be looped through
+
+# Models are constructed between each supertype and each mutational signature
+# This is perforem for each supertype
+
+# HLA Supertype A01 ####
+setwd("C:/Users/bensi/OneDrive/Documents/Cancer Institute job/HLA supertypes/Data_analysis/Pan-cancer HLA Supertype vs COSMIC Sig/Definition 2 results/Histology adjusted")
+# make model and create loop
+for (i in seq_along(varlist)) # generates a sequence the same length of the argument passed, and in the context of a for loop is used to more easily generate the index to iterate over
+{
+  # Create formula which will be interated within the glm model
+  mod <- as.formula(sprintf("RECIST_binary ~ Supertype_A01 * %s + Tum_Type", varlist[i])) # Sprintf is String print: instead of printing to console, stores output on char buffer which are specified in sprintf. %s represents "insert a string here"
+  # generic glm model with imbedded formula
+  x <- paste("Model_A01_",i, sep="") # pastes Model, followed by the current iteration value
+  assign(x, glm(formula = mod, family = binomial(link='logit'), data = Pan_c_log_reg)) # assign uses the value x as variable name and assigns the glm output into it
+}
+
+# create list of model names for use in lapply
+model.list<-mget(grep("Model_A01_[0-9]+$", ls(),value=T))
+
+# extract coefficients using lapply function
+coefs<-lapply(model.list,function(x)exp(coef(x))) # Extract exponent of coefficient which is Odds ratio
+Coeff_all <- as.data.frame(unlist(coefs))
+
+# extract p values from models
+pval <- lapply(model.list,function(x)coef(summary(x))[,4])
+pval_all <- as.data.frame(unlist(pval))
+summary(Model_A01_1)
+
+# calculate confidence intervals
+Confint_2.5 <- as.data.frame(unlist(lapply(model.list,function(x)exp(confint(x)[,1]))))
+Confint_97.5 <- as.data.frame(unlist(lapply(model.list,function(x)exp(confint(x)[,2]))))
+
+# reorganise and rename columns
+setDT(Coeff_all, keep.rownames = TRUE)[] # Set rowname as column 1, uses data.table
+setDT(pval_all, keep.rownames = TRUE)[] # Set rowname as column 1
+setDT(Confint_2.5, keep.rownames = TRUE)[] # Set rowname as column 1, uses data.table
+setDT(Confint_97.5, keep.rownames = TRUE)[] # Set rowname as column 1
+
+# rename, so they reflect the values held inside
+names(Coeff_all)[1] <- "Model_Sig"
+names(Coeff_all)[2] <- "Odds_ratio"
+
+# p values
+names(pval_all)[1] <- "Model_Sig"
+names(pval_all)[2] <- "p_value"
+
+# confidence intervals
+names(Confint_2.5)[1] <- "Model_Sig"
+names(Confint_2.5)[2] <- "Lower_CI"
+names(Confint_97.5)[1] <- "Model_Sig"
+names(Confint_97.5)[2] <- "Upper_CI"
+
+# combine
+Supertype_A01_interactions <-merge(Coeff_all, pval_all, by="Model_Sig", all.x=TRUE)
+Supertype_A01_interactions <-merge(Supertype_A01_interactions, Confint_2.5, by="Model_Sig", all.x=TRUE)
+Supertype_A01_interactions <-merge(Supertype_A01_interactions, Confint_97.5, by="Model_Sig", all.x=TRUE)
+Supertype_A01_interactions$FDR <- p.adjust(Supertype_A01_interactions$p_value, "BH", n=length(Supertype_A01_interactions$p_value))
+setwd("C:/Users/bensi/OneDrive/Documents/Cancer Institute job/HLA supertypes/Data_analysis/Pan-cancer HLA Supertype vs COSMIC Sig/Definition 2 results/Histology adjusted/No_Indel/")
+write.csv(Supertype_A01_interactions, file="Supertype_A01_interactions_def2_Tum_Type.csv")
+
+# HLA Supertype A02 ####
+# make model and create loop
+for (i in seq_along(varlist)) # generates a sequence the same length of the argument passed, and in the context of a for loop is used to more easily generate the index to iterate over
+{
+  # Create formula which will be interated within the glm model
+  mod <- as.formula(sprintf("RECIST_binary ~ Supertype_A02 * %s + Tum_Type", varlist[i])) # Sprintf is String print: instead of printing to console, stores output on char buffer which are specified in sprintf. %s represents "insert a string here"
+  # generic glm model with imbedded formula
+  x <- paste("Model_A02_",i, sep="") # pastes Model, followed by the current iteration value
+  assign(x, glm(formula = mod, family = binomial(link='logit'), data = Pan_c_log_reg)) # assign uses the value x as variable name and assigns the glm output into it
+}
+
+# create list of model names for use in lapply
+model.list<-mget(grep("Model_A02_[0-9]+$", ls(),value=T))
+
+# extract coefficients using lapply function
+coefs<-lapply(model.list,function(x)exp(coef(x))) # Extract exponent of coefficient which is Odds ratio
+Coeff_all <- as.data.frame(unlist(coefs))
+
+# extract p values from models
+pval <- lapply(model.list,function(x)coef(summary(x))[,4])
+pval_all <- as.data.frame(unlist(pval))
+
+# extract confidence intervals
+Confint_2.5 <- as.data.frame(unlist(lapply(model.list,function(x)exp(confint(x)[,1]))))
+Confint_97.5 <- as.data.frame(unlist(lapply(model.list,function(x)exp(confint(x)[,2]))))
+
+# reorganise and rename columns
+setDT(Coeff_all, keep.rownames = TRUE)[] # Set rowname as column 1, uses data.table
+setDT(pval_all, keep.rownames = TRUE)[] # Set rowname as column 1
+setDT(Confint_2.5, keep.rownames = TRUE)[] # Set rowname as column 1, uses data.table
+setDT(Confint_97.5, keep.rownames = TRUE)[] # Set rowname as column 1
+
+# rename, so they reflect the values held inside
+names(Coeff_all)[1] <- "Model_Sig"
+names(Coeff_all)[2] <- "Odds_ratio"
+
+# p values
+names(pval_all)[1] <- "Model_Sig"
+names(pval_all)[2] <- "p_value"
+
+# confidence intervals
+names(Confint_2.5)[1] <- "Model_Sig"
+names(Confint_2.5)[2] <- "Lower_CI"
+names(Confint_97.5)[1] <- "Model_Sig"
+names(Confint_97.5)[2] <- "Upper_CI"
+
+# combine
+Supertype_A02_interactions <-merge(Coeff_all, pval_all, by="Model_Sig", all.x=TRUE)
+Supertype_A02_interactions <-merge(Supertype_A02_interactions, Confint_2.5, by="Model_Sig", all.x=TRUE)
+Supertype_A02_interactions <-merge(Supertype_A02_interactions, Confint_97.5, by="Model_Sig", all.x=TRUE)
+Supertype_A02_interactions$FDR <- p.adjust(Supertype_A02_interactions$p_value, "BH", n=length(Supertype_A02_interactions$p_value))
+write.csv(Supertype_A02_interactions, file="Supertype_A02_interactions_def2_Tum_Type.csv")
+
+# HLA Supertype B44 ####
+# make model and create loop
+for (i in seq_along(varlist)) # generates a sequence the same length of the argument passed, and in the context of a for loop is used to more easily generate the index to iterate over
+{
+  # Create formula which will be interated within the glm model
+  mod <- as.formula(sprintf("RECIST_binary ~ Supertype_B44 * %s + Tum_Type", varlist[i])) # Sprintf is String print: instead of printing to console, stores output on char buffer which are specified in sprintf. %s represents "insert a string here"
+  # generic glm model with imbedded formula
+  x <- paste("Model_B44_",i, sep="") # pastes Model, followed by the current iteration value
+  assign(x, glm(formula = mod, family = binomial(link='logit'), data = Pan_c_log_reg)) # assign uses the value x as variable name and assigns the glm output into it
+}
+
+# create list of model names for use in lapply
+model.list<-mget(grep("Model_B44_[0-9]+$", ls(),value=T))
+
+# extract coefficients using lapply function
+coefs<-lapply(model.list,function(x)exp(coef(x))) # Extract exponent of coefficient which is Odds ratio
+Coeff_all <- as.data.frame(unlist(coefs))
+
+# extract p values from models
+pval <- lapply(model.list,function(x)coef(summary(x))[,4])
+pval_all <- as.data.frame(unlist(pval))
+
+# extract confidence intervals
+Confint_2.5 <- as.data.frame(unlist(lapply(model.list,function(x)exp(confint(x)[,1]))))
+Confint_97.5 <- as.data.frame(unlist(lapply(model.list,function(x)exp(confint(x)[,2]))))
+
+# reorganise and rename columns
+setDT(Coeff_all, keep.rownames = TRUE)[] # Set rowname as column 1, uses data.table
+setDT(pval_all, keep.rownames = TRUE)[] # Set rowname as column 1
+setDT(Confint_2.5, keep.rownames = TRUE)[] # Set rowname as column 1, uses data.table
+setDT(Confint_97.5, keep.rownames = TRUE)[] # Set rowname as column 1
+
+# rename, so they reflect the values held inside
+names(Coeff_all)[1] <- "Model_Sig"
+names(Coeff_all)[2] <- "Odds_ratio"
+
+# p values
+names(pval_all)[1] <- "Model_Sig"
+names(pval_all)[2] <- "p_value"
+
+# confidence intervals
+names(Confint_2.5)[1] <- "Model_Sig"
+names(Confint_2.5)[2] <- "Lower_CI"
+names(Confint_97.5)[1] <- "Model_Sig"
+names(Confint_97.5)[2] <- "Upper_CI"
+
+# combine
+Supertype_B44_interactions <-merge(Coeff_all, pval_all, by="Model_Sig", all.x=TRUE)
+Supertype_B44_interactions <-merge(Supertype_B44_interactions, Confint_2.5, by="Model_Sig", all.x=TRUE)
+Supertype_B44_interactions <-merge(Supertype_B44_interactions, Confint_97.5, by="Model_Sig", all.x=TRUE)
+Supertype_B44_interactions$FDR <- p.adjust(Supertype_B44_interactions$p_value, "BH", n=length(Supertype_B44_interactions$p_value))
+write.csv(Supertype_B44_interactions, file="Supertype_B44_interactions_def2_Tum_Type.csv")
+
+# selecting patients with RECIST response data, specified 'include in analysis and has a HLA_A and HLA_B designation
+
+# HLA Supertype A03 ####
+# make model and create loop
+for (i in seq_along(varlist)) # generates a sequence the same length of the argument passed, and in the context of a for loop is used to more easily generate the index to iterate over
+{
+  # Create formula which will be interated within the glm model
+  mod <- as.formula(sprintf("RECIST_binary ~ Supertype_A03 * %s + Tum_Type", varlist[i])) # Sprintf is String print: instead of printing to console, stores output on char buffer which are specified in sprintf. %s represents "insert a string here"
+  # generic glm model with imbedded formula
+  x <- paste("Model_A03_",i, sep="") # pastes Model, followed by the current iteration value
+  assign(x, glm(formula = mod, family = binomial(link='logit'), data = Pan_c_log_reg)) # assign uses the value x as variable name and assigns the glm output into it
+}
+
+# create list of model names for use in lapply
+model.list<-mget(grep("Model_A03_[0-9]+$", ls(),value=T))
+
+# extract coefficients using lapply function
+coefs<-lapply(model.list,function(x)exp(coef(x))) # Extract exponent of coefficient which is Odds ratio
+Coeff_all <- as.data.frame(unlist(coefs))
+
+# extract p values from models
+pval <- lapply(model.list,function(x)coef(summary(x))[,4])
+pval_all <- as.data.frame(unlist(pval))
+
+# extract confidence intervals
+Confint_2.5 <- as.data.frame(unlist(lapply(model.list,function(x)exp(confint(x)[,1]))))
+Confint_97.5 <- as.data.frame(unlist(lapply(model.list,function(x)exp(confint(x)[,2]))))
+
+# reorganise and rename columns
+setDT(Coeff_all, keep.rownames = TRUE)[] # Set rowname as column 1, uses data.table
+setDT(pval_all, keep.rownames = TRUE)[] # Set rowname as column 1
+setDT(Confint_2.5, keep.rownames = TRUE)[] # Set rowname as column 1, uses data.table
+setDT(Confint_97.5, keep.rownames = TRUE)[] # Set rowname as column 1
+
+# rename, so they reflect the values held inside
+names(Coeff_all)[1] <- "Model_Sig"
+names(Coeff_all)[2] <- "Odds_ratio"
+
+# p values
+names(pval_all)[1] <- "Model_Sig"
+names(pval_all)[2] <- "p_value"
+
+# confidence intervals
+names(Confint_2.5)[1] <- "Model_Sig"
+names(Confint_2.5)[2] <- "Lower_CI"
+names(Confint_97.5)[1] <- "Model_Sig"
+names(Confint_97.5)[2] <- "Upper_CI"
+
+# combine
+Supertype_A03_interactions <-merge(Coeff_all, pval_all, by="Model_Sig", all.x=TRUE)
+Supertype_A03_interactions <-merge(Supertype_A03_interactions, Confint_2.5, by="Model_Sig", all.x=TRUE)
+Supertype_A03_interactions <-merge(Supertype_A03_interactions, Confint_97.5, by="Model_Sig", all.x=TRUE)
+Supertype_A03_interactions$FDR <- p.adjust(Supertype_A03_interactions$p_value, "BH", n=length(Supertype_A03_interactions$p_value))
+write.csv(Supertype_A03_interactions, file="Supertype_A03_interactions_def2_Tum_Type.csv")
+
+# selecting patients with RECIST response data, specified 'include in analysis and has a HLA_A and HLA_B designation
+
+# HLA Supertype A24 ####
+# make model and create loop
+for (i in seq_along(varlist)) # generates a sequence the same length of the argument passed, and in the context of a for loop is used to more easily generate the index to iterate over
+{
+  # Create formula which will be interated within the glm model
+  mod <- as.formula(sprintf("RECIST_binary ~ Supertype_A24 * %s + Tum_Type", varlist[i])) # Sprintf is String print: instead of printing to console, stores output on char buffer which are specified in sprintf. %s represents "insert a string here"
+  # generic glm model with imbedded formula
+  x <- paste("Model_A24_",i, sep="") # pastes Model, followed by the current iteration value
+  assign(x, glm(formula = mod, family = binomial(link='logit'), data = Pan_c_log_reg)) # assign uses the value x as variable name and assigns the glm output into it
+}
+
+# create list of model names for use in lapply
+model.list<-mget(grep("Model_A24_[0-9]+$", ls(),value=T))
+
+# extract coefficients using lapply function
+coefs<-lapply(model.list,function(x)exp(coef(x))) # Extract exponent of coefficient which is Odds ratio
+Coeff_all <- as.data.frame(unlist(coefs))
+
+# extract p values from models
+pval <- lapply(model.list,function(x)coef(summary(x))[,4])
+pval_all <- as.data.frame(unlist(pval))
+
+# extract confidence intervals
+Confint_2.5 <- as.data.frame(unlist(lapply(model.list,function(x)exp(confint(x)[,1]))))
+Confint_97.5 <- as.data.frame(unlist(lapply(model.list,function(x)exp(confint(x)[,2]))))
+
+# reorganise and rename columns
+setDT(Coeff_all, keep.rownames = TRUE)[] # Set rowname as column 1, uses data.table
+setDT(pval_all, keep.rownames = TRUE)[] # Set rowname as column 1
+setDT(Confint_2.5, keep.rownames = TRUE)[] # Set rowname as column 1, uses data.table
+setDT(Confint_97.5, keep.rownames = TRUE)[] # Set rowname as column 1
+
+# rename, so they reflect the values held inside
+names(Coeff_all)[1] <- "Model_Sig"
+names(Coeff_all)[2] <- "Odds_ratio"
+
+# p values
+names(pval_all)[1] <- "Model_Sig"
+names(pval_all)[2] <- "p_value"
+
+# confidence intervals
+names(Confint_2.5)[1] <- "Model_Sig"
+names(Confint_2.5)[2] <- "Lower_CI"
+names(Confint_97.5)[1] <- "Model_Sig"
+names(Confint_97.5)[2] <- "Upper_CI"
+
+# combine
+Supertype_A24_interactions <-merge(Coeff_all, pval_all, by="Model_Sig", all.x=TRUE)
+Supertype_A24_interactions <-merge(Supertype_A24_interactions, Confint_2.5, by="Model_Sig", all.x=TRUE)
+Supertype_A24_interactions <-merge(Supertype_A24_interactions, Confint_97.5, by="Model_Sig", all.x=TRUE)
+Supertype_A24_interactions$FDR <- p.adjust(Supertype_A24_interactions$p_value, "BH", n=length(Supertype_A24_interactions$p_value))
+write.csv(Supertype_A24_interactions, file="Supertype_A24_interactions_def2_Tum_Type.csv")
+
+# HLA Supertype B07 ####
+# make model and create loop
+for (i in seq_along(varlist)) # generates a sequence the same length of the argument passed, and in the context of a for loop is used to more easily generate the index to iterate over
+{
+  # Create formula which will be interated within the glm model
+  mod <- as.formula(sprintf("RECIST_binary ~ Supertype_B07 * %s + Tum_Type", varlist[i])) # Sprintf is String print: instead of printing to console, stores output on char buffer which are specified in sprintf. %s represents "insert a string here"
+  # generic glm model with imbedded formula
+  x <- paste("Model_B07_",i, sep="") # pastes Model, followed by the current iteration value
+  assign(x, glm(formula = mod, family = binomial(link='logit'), data = Pan_c_log_reg)) # assign uses the value x as variable name and assigns the glm output into it
+}
+
+# create list of model names for use in lapply
+model.list<-mget(grep("Model_B07_[0-9]+$", ls(),value=T))
+
+# extract coefficients using lapply function
+coefs<-lapply(model.list,function(x)exp(coef(x))) # Extract exponent of coefficient which is Odds ratio
+Coeff_all <- as.data.frame(unlist(coefs))
+
+# extract p values from models
+pval <- lapply(model.list,function(x)coef(summary(x))[,4])
+pval_all <- as.data.frame(unlist(pval))
+
+# extract confidence intervals
+Confint_2.5 <- as.data.frame(unlist(lapply(model.list,function(x)exp(confint(x)[,1]))))
+Confint_97.5 <- as.data.frame(unlist(lapply(model.list,function(x)exp(confint(x)[,2]))))
+
+# reorganise and rename columns
+setDT(Coeff_all, keep.rownames = TRUE)[] # Set rowname as column 1, uses data.table
+setDT(pval_all, keep.rownames = TRUE)[] # Set rowname as column 1
+setDT(Confint_2.5, keep.rownames = TRUE)[] # Set rowname as column 1, uses data.table
+setDT(Confint_97.5, keep.rownames = TRUE)[] # Set rowname as column 1
+
+# rename, so they reflect the values held inside
+names(Coeff_all)[1] <- "Model_Sig"
+names(Coeff_all)[2] <- "Odds_ratio"
+
+# p values
+names(pval_all)[1] <- "Model_Sig"
+names(pval_all)[2] <- "p_value"
+
+# confidence intervals
+names(Confint_2.5)[1] <- "Model_Sig"
+names(Confint_2.5)[2] <- "Lower_CI"
+names(Confint_97.5)[1] <- "Model_Sig"
+names(Confint_97.5)[2] <- "Upper_CI"
+
+# combine
+Supertype_B07_interactions <-merge(Coeff_all, pval_all, by="Model_Sig", all.x=TRUE)
+Supertype_B07_interactions <-merge(Supertype_B07_interactions, Confint_2.5, by="Model_Sig", all.x=TRUE)
+Supertype_B07_interactions <-merge(Supertype_B07_interactions, Confint_97.5, by="Model_Sig", all.x=TRUE)
+Supertype_B07_interactions$FDR <- p.adjust(Supertype_B07_interactions$p_value, "BH", n=length(Supertype_B07_interactions$p_value))
+write.csv(Supertype_B07_interactions, file="Supertype_B07_interactions_def2_Tum_Type.csv")
+
+# HLA Supertype B08 ####
+# make model and create loop
+for (i in seq_along(varlist)) # generates a sequence the same length of the argument passed, and in the context of a for loop is used to more easily generate the index to iterate over
+{
+  # Create formula which will be interated within the glm model
+  mod <- as.formula(sprintf("RECIST_binary ~ Supertype_B08 * %s + Tum_Type", varlist[i])) # Sprintf is String print: instead of printing to console, stores output on char buffer which are specified in sprintf. %s represents "insert a string here"
+  # generic glm model with imbedded formula
+  x <- paste("Model_B08_",i, sep="") # pastes Model, followed by the current iteration value
+  assign(x, glm(formula = mod, family = binomial(link='logit'), data = Pan_c_log_reg)) # assign uses the value x as variable name and assigns the glm output into it
+}
+
+# create list of model names for use in lapply
+model.list<-mget(grep("Model_B08_[0-9]+$", ls(),value=T))
+
+# extract coefficients using lapply function
+coefs<-lapply(model.list,function(x)exp(coef(x))) # Extract exponent of coefficient which is Odds ratio
+Coeff_all <- as.data.frame(unlist(coefs))
+
+# extract p values from models
+pval <- lapply(model.list,function(x)coef(summary(x))[,4])
+pval_all <- as.data.frame(unlist(pval))
+
+# extract confidence intervals
+Confint_2.5 <- as.data.frame(unlist(lapply(model.list,function(x)exp(confint(x)[,1]))))
+Confint_97.5 <- as.data.frame(unlist(lapply(model.list,function(x)exp(confint(x)[,2]))))
+
+# reorganise and rename columns
+setDT(Coeff_all, keep.rownames = TRUE)[] # Set rowname as column 1, uses data.table
+setDT(pval_all, keep.rownames = TRUE)[] # Set rowname as column 1
+setDT(Confint_2.5, keep.rownames = TRUE)[] # Set rowname as column 1, uses data.table
+setDT(Confint_97.5, keep.rownames = TRUE)[] # Set rowname as column 1
+
+# rename, so they reflect the values held inside
+names(Coeff_all)[1] <- "Model_Sig"
+names(Coeff_all)[2] <- "Odds_ratio"
+
+# p values
+names(pval_all)[1] <- "Model_Sig"
+names(pval_all)[2] <- "p_value"
+
+# confidence intervals
+names(Confint_2.5)[1] <- "Model_Sig"
+names(Confint_2.5)[2] <- "Lower_CI"
+names(Confint_97.5)[1] <- "Model_Sig"
+names(Confint_97.5)[2] <- "Upper_CI"
+
+# combine
+Supertype_B08_interactions <-merge(Coeff_all, pval_all, by="Model_Sig", all.x=TRUE)
+Supertype_B08_interactions <-merge(Supertype_B08_interactions, Confint_2.5, by="Model_Sig", all.x=TRUE)
+Supertype_B08_interactions <-merge(Supertype_B08_interactions, Confint_97.5, by="Model_Sig", all.x=TRUE)
+Supertype_B08_interactions$FDR <- p.adjust(Supertype_B08_interactions$p_value, "BH", n=length(Supertype_B08_interactions$p_value))
+write.csv(Supertype_B08_interactions, file="Supertype_B08_interactions_def2_Tum_Type.csv")
+
+# HLA Supertype B27 ####
+# make model and create loop
+for (i in seq_along(varlist)) # generates a sequence the same length of the argument passed, and in the context of a for loop is used to more easily generate the index to iterate over
+{
+  # Create formula which will be interated within the glm model
+  mod <- as.formula(sprintf("RECIST_binary ~ Supertype_B27 * %s + Tum_Type", varlist[i])) # Sprintf is String print: instead of printing to console, stores output on char buffer which are specified in sprintf. %s represents "insert a string here"
+  # generic glm model with imbedded formula
+  x <- paste("Model_B27_",i, sep="") # pastes Model, followed by the current iteration value
+  assign(x, glm(formula = mod, family = binomial(link='logit'), data = Pan_c_log_reg)) # assign uses the value x as variable name and assigns the glm output into it
+}
+
+# create list of model names for use in lapply
+model.list<-mget(grep("Model_B27_[0-9]+$", ls(),value=T))
+
+# extract coefficients using lapply function
+coefs<-lapply(model.list,function(x)exp(coef(x))) # Extract exponent of coefficient which is Odds ratio
+Coeff_all <- as.data.frame(unlist(coefs))
+
+# extract p values from models
+pval <- lapply(model.list,function(x)coef(summary(x))[,4])
+pval_all <- as.data.frame(unlist(pval))
+
+# extract confidence intervals
+Confint_2.5 <- as.data.frame(unlist(lapply(model.list,function(x)exp(confint(x)[,1]))))
+Confint_97.5 <- as.data.frame(unlist(lapply(model.list,function(x)exp(confint(x)[,2]))))
+
+# reorganise and rename columns
+setDT(Coeff_all, keep.rownames = TRUE)[] # Set rowname as column 1, uses data.table
+setDT(pval_all, keep.rownames = TRUE)[] # Set rowname as column 1
+setDT(Confint_2.5, keep.rownames = TRUE)[] # Set rowname as column 1, uses data.table
+setDT(Confint_97.5, keep.rownames = TRUE)[] # Set rowname as column 1
+
+# rename, so they reflect the values held inside
+names(Coeff_all)[1] <- "Model_Sig"
+names(Coeff_all)[2] <- "Odds_ratio"
+
+# p values
+names(pval_all)[1] <- "Model_Sig"
+names(pval_all)[2] <- "p_value"
+
+# confidence intervals
+names(Confint_2.5)[1] <- "Model_Sig"
+names(Confint_2.5)[2] <- "Lower_CI"
+names(Confint_97.5)[1] <- "Model_Sig"
+names(Confint_97.5)[2] <- "Upper_CI"
+
+# combine
+Supertype_B27_interactions <-merge(Coeff_all, pval_all, by="Model_Sig", all.x=TRUE)
+Supertype_B27_interactions <-merge(Supertype_B27_interactions, Confint_2.5, by="Model_Sig", all.x=TRUE)
+Supertype_B27_interactions <-merge(Supertype_B27_interactions, Confint_97.5, by="Model_Sig", all.x=TRUE)
+Supertype_B27_interactions$FDR <- p.adjust(Supertype_B27_interactions$p_value, "BH", n=length(Supertype_B27_interactions$p_value))
+write.csv(Supertype_B27_interactions, file="Supertype_B27_interactions_def2_Tum_Type.csv")
+
+# HLA Supertype B58 ####
+# make model and create loop
+for (i in seq_along(varlist)) # generates a sequence the same length of the argument passed, and in the context of a for loop is used to more easily generate the index to iterate over
+{
+  # Create formula which will be interated within the glm model
+  mod <- as.formula(sprintf("RECIST_binary ~ Supertype_B58 * %s + Tum_Type", varlist[i])) # Sprintf is String print: instead of printing to console, stores output on char buffer which are specified in sprintf. %s represents "insert a string here"
+  # generic glm model with imbedded formula
+  x <- paste("Model_B58_",i, sep="") # pastes Model, followed by the current iteration value
+  assign(x, glm(formula = mod, family = binomial(link='logit'), data = Pan_c_log_reg)) # assign uses the value x as variable name and assigns the glm output into it
+}
+
+# create list of model names for use in lapply
+model.list<-mget(grep("Model_B58_[0-9]+$", ls(),value=T))
+
+# extract coefficients using lapply function
+coefs<-lapply(model.list,function(x)exp(coef(x))) # Extract exponent of coefficient which is Odds ratio
+Coeff_all <- as.data.frame(unlist(coefs))
+
+# extract p values from models
+pval <- lapply(model.list,function(x)coef(summary(x))[,4])
+pval_all <- as.data.frame(unlist(pval))
+
+# extract confidence intervals
+Confint_2.5 <- as.data.frame(unlist(lapply(model.list,function(x)exp(confint(x)[,1]))))
+Confint_97.5 <- as.data.frame(unlist(lapply(model.list,function(x)exp(confint(x)[,2]))))
+
+# reorganise and rename columns
+setDT(Coeff_all, keep.rownames = TRUE)[] # Set rowname as column 1, uses data.table
+setDT(pval_all, keep.rownames = TRUE)[] # Set rowname as column 1
+setDT(Confint_2.5, keep.rownames = TRUE)[] # Set rowname as column 1, uses data.table
+setDT(Confint_97.5, keep.rownames = TRUE)[] # Set rowname as column 1
+
+# rename, so they reflect the values held inside
+names(Coeff_all)[1] <- "Model_Sig"
+names(Coeff_all)[2] <- "Odds_ratio"
+
+# p values
+names(pval_all)[1] <- "Model_Sig"
+names(pval_all)[2] <- "p_value"
+
+# confidence intervals
+names(Confint_2.5)[1] <- "Model_Sig"
+names(Confint_2.5)[2] <- "Lower_CI"
+names(Confint_97.5)[1] <- "Model_Sig"
+names(Confint_97.5)[2] <- "Upper_CI"
+
+# combine
+Supertype_B58_interactions <-merge(Coeff_all, pval_all, by="Model_Sig", all.x=TRUE)
+Supertype_B58_interactions <-merge(Supertype_B58_interactions, Confint_2.5, by="Model_Sig", all.x=TRUE)
+Supertype_B58_interactions <-merge(Supertype_B58_interactions, Confint_97.5, by="Model_Sig", all.x=TRUE)
+Supertype_B58_interactions$FDR <- p.adjust(Supertype_B58_interactions$p_value, "BH", n=length(Supertype_B58_interactions$p_value))
+write.csv(Supertype_B58_interactions, file="Supertype_B58_interactions_def2_Tum_Type.csv")
+
+# HLA Supertype B62 ####
+# make model and create loop
+for (i in seq_along(varlist)) # generates a sequence the same length of the argument passed, and in the context of a for loop is used to more easily generate the index to iterate over
+{
+  # Create formula which will be interated within the glm model
+  mod <- as.formula(sprintf("RECIST_binary ~ Supertype_B62 * %s + Tum_Type", varlist[i])) # Sprintf is String print: instead of printing to console, stores output on char buffer which are specified in sprintf. %s represents "insert a string here"
+  # generic glm model with imbedded formula
+  x <- paste("Model_B62_",i, sep="") # pastes Model, followed by the current iteration value
+  assign(x, glm(formula = mod, family = binomial(link='logit'), data = Pan_c_log_reg)) # assign uses the value x as variable name and assigns the glm output into it
+}
+
+# create list of model names for use in lapply
+model.list<-mget(grep("Model_B62_[0-9]+$", ls(),value=T))
+
+# extract coefficients using lapply function
+coefs<-lapply(model.list,function(x)exp(coef(x))) # Extract exponent of coefficient which is Odds ratio
+Coeff_all <- as.data.frame(unlist(coefs))
+
+# extract p values from models
+pval <- lapply(model.list,function(x)coef(summary(x))[,4])
+pval_all <- as.data.frame(unlist(pval))
+
+# extract confidence intervals
+Confint_2.5 <- as.data.frame(unlist(lapply(model.list,function(x)exp(confint(x)[,1]))))
+Confint_97.5 <- as.data.frame(unlist(lapply(model.list,function(x)exp(confint(x)[,2]))))
+
+# reorganise and rename columns
+setDT(Coeff_all, keep.rownames = TRUE)[] # Set rowname as column 1, uses data.table
+setDT(pval_all, keep.rownames = TRUE)[] # Set rowname as column 1
+setDT(Confint_2.5, keep.rownames = TRUE)[] # Set rowname as column 1, uses data.table
+setDT(Confint_97.5, keep.rownames = TRUE)[] # Set rowname as column 1
+
+# rename, so they reflect the values held inside
+names(Coeff_all)[1] <- "Model_Sig"
+names(Coeff_all)[2] <- "Odds_ratio"
+
+# p values
+names(pval_all)[1] <- "Model_Sig"
+names(pval_all)[2] <- "p_value"
+
+# confidence intervals
+names(Confint_2.5)[1] <- "Model_Sig"
+names(Confint_2.5)[2] <- "Lower_CI"
+names(Confint_97.5)[1] <- "Model_Sig"
+names(Confint_97.5)[2] <- "Upper_CI"
+
+# combine
+Supertype_B62_interactions <-merge(Coeff_all, pval_all, by="Model_Sig", all.x=TRUE)
+Supertype_B62_interactions <-merge(Supertype_B62_interactions, Confint_2.5, by="Model_Sig", all.x=TRUE)
+Supertype_B62_interactions <-merge(Supertype_B62_interactions, Confint_97.5, by="Model_Sig", all.x=TRUE)
+Supertype_B62_interactions$FDR <- p.adjust(Supertype_B62_interactions$p_value, "BH", n=length(Supertype_B62_interactions$p_value))
+write.csv(Supertype_B62_interactions, file="Supertype_B62_interactions_def2_Tum_Type.csv")
+
+##### HLA supertype vs COSMIC summary ####
+## Create results matrices and heatmap ####
+# read in files:
+setwd("C:/Users/bensi/OneDrive/Documents/Cancer Institute job/HLA supertypes/Data_analysis/Pan-cancer HLA Supertype vs COSMIC Sig/Definition 2 results/Histology adjusted/No_Indel/")
+A01_interactions <- read_csv("Supertype_A01_interactions_def2_Tum_Type.csv")
+A02_interactions <- read_csv("Supertype_A02_interactions_def2_Tum_Type.csv")
+A03_interactions <- read_csv("Supertype_A03_interactions_def2_Tum_Type.csv")
+A24_interactions <- read_csv("Supertype_A24_interactions_def2_Tum_Type.csv")
+B07_interactions <- read_csv("Supertype_B07_interactions_def2_Tum_Type.csv")
+B08_interactions <- read_csv("Supertype_B08_interactions_def2_Tum_Type.csv")
+B27_interactions <- read_csv("Supertype_B27_interactions_def2_Tum_Type.csv")
+B44_interactions <- read_csv("Supertype_B44_interactions_def2_Tum_Type.csv")
+B58_interactions <- read_csv("Supertype_B58_interactions_def2_Tum_Type.csv")
+B62_interactions <- read_csv("Supertype_B62_interactions_def2_Tum_Type.csv")
+
+# Join all dataframes using r bind
+Res <-  do.call("rbind", list(A01_interactions, A02_interactions, A03_interactions, A24_interactions, B07_interactions, B08_interactions, B27_interactions, B44_interactions, B58_interactions, B62_interactions))
+
+# Need a -logFDR column and a simpler Supertype designation column for labels
+Res$Minus_log10FDR <- -log10(Res$FDR) 
+
+# Split column one, join and rename
+Split <- str_split_fixed(Res$Model_Sig, fixed("."), 2)
+Res <- cbind(Res, Split)
+names(Res)[9] <- "Model_name"
+names(Res)[10] <- "Signature"
+
+# need to remove superfluous details on designations
+Res$Model_name <- gsub("_[0-9]*","",Res$Model_name) # remove model number
+Res$Model_name <- gsub("Model","",Res$Model_name) # remove 'model'
+
+# need to remove superfluous details on designations
+Res$Signature <- gsub(".*:","",Res$Signature) # remove model number
+
+# what about adjusting FDR for all models together
+Res$Overall_FDR <- p.adjust(Res$p_value, "BH", n=length(Res$p_value))
+
+
+setwd("C:/Users/bensi/OneDrive/Documents/Cancer Institute job/HLA supertypes/Data_analysis/Pan-cancer HLA Supertype vs COSMIC Sig/Definition 2 results/Histology adjusted/No_Indel/")
+write.csv(Res, "Results_Pan_cancer_def2_Tum_Type_adjust.csv")
+
+##############################################################################################
+##########################Creating figure from interaction data ##############################
+##############################################################################################
 # Libraries
 library(readr)
 library(ggplot2)
@@ -17,7 +649,7 @@ library(ggplotify)
 # Figure 1b
 # Read in source file
 # setwd("") # if needed
-Res <- read_csv("Results_Pan_cancer_def2_histo_adjusted.csv")
+Res <- read_csv("Results_Pan_cancer_def2_Tum_Type_adjust.csv")
 
 # Exclude intercepts from models and only look for interaction terms, which are denoted with ":"
 # both together
