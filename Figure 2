@@ -238,7 +238,7 @@ setwd("C:/Users/bensi/OneDrive/Documents/Cancer Institute job/HLA supertypes/Dat
 # read in neoantigen file
 Neoantigen <- read_csv("Neoantigen_with_AA_shift_master.csv")
 
-##### TAP larger study ####
+# Get corresponding TAP binding scores for neoantigens (stored in .xls files from NetCTLpan)
 setwd("C:/Users/bensi/OneDrive/Documents/Cancer Institute job/HLA supertypes/Data_analysis/Neoantigenes_CPI1000_NETMHCpan/Ben_netMHC/Pan/All/TAP predictions/RawCTL processed")
 file_paths <- list.files(, pattern = ".xls", full.names = TRUE)
 file_paths <- gsub("./","",file_paths)
@@ -369,5 +369,419 @@ ggsave(
   scale = 1,
   width = 120,
   height = 80,
+  units = "mm",
+  dpi = 300)
+  
+#####################################################################################
+#####========= TAP mRNA expression effect on B07 Ag presentation  =============######
+##### Figure.2f, g & Supp Fig.2e 
+#####################################################################################
+
+# About this analysis:
+# Uses immunopeptidomic data from the Bulik-Sullivan et al., study
+# Assesses the differences in displayed peptides between B07+ and B07- patients
+# with respect to TAP mRNA expression.
+# Assesses the number of P2 Pro residues displayed by HLAs with high or low TAP mRNA expression
+
+# Libraries
+library(readr)
+library(ggplot2)
+library(stringr)
+library(rstatix)
+library(DescTools)
+library(plotrix)
+library(ggpubr)
+library(reshape2)
+
+# setwd
+setwd("C:/Users/bensi/OneDrive/Documents/")
+
+# read in RNA expression matrix file
+
+RNA_expression <- as.data.frame(read_csv("~/Cancer Institute job/HLA supertypes/Data_analysis/Bulik-Sullivan dataset/RNA_expression.csv"))
+
+# For our purposes, we are interested in only TAP1 and TAP2
+# Need to subset TAP1 and TAP2 isoforms
+#set transcript IDs as rownames
+rownames(RNA_expression) <- make.unique(RNA_expression$transcript_id)
+
+# Extract TAP genes
+TAP2_transcripts <- c("ENST00000374897.2","ENST00000374899.8","ENST00000620123.4")
+TAP1_transcripts <- c("ENST00000354258.4")
+TAP_genes <- append(TAP1_transcripts,TAP2_transcripts)
+
+# Subset transcripts
+GOI_subset <- as.data.frame(RNA_expression[c(TAP_genes),])
+
+# transpose and merge
+GOI_subset_t <- as.data.frame(t(GOI_subset[,-c(1:2)])) # removes transcript ID and gene ID columns
+
+# make numeric
+cols.num <- c(1:4)
+GOI_subset_t[cols.num] <- sapply(GOI_subset_t[cols.num],as.numeric)
+
+# sum isoforms of TAP 2 
+library(dplyr)
+GOI_subset_new <- as.data.frame(GOI_subset_t %>% rowwise() %>% mutate(TAP2 = sum(c(ENST00000374897.2,ENST00000374899.8,ENST00000620123.4))))
+
+# take median of TAP1 and TAP2 transcripts to get representative "score"
+GOI_subset_new <- as.data.frame(GOI_subset_new %>% rowwise() %>% mutate(TAP_score = median(c(ENST00000354258.4,TAP2))))
+rownames(GOI_subset_new) <- rownames(GOI_subset_t)
+GOI_subset_new$ID <- rownames(GOI_subset_t)
+
+# get median TAP_score and split into high and low
+median(na.omit(GOI_subset_new$TAP_score)) #66.195
+GOI_subset_new$TAP_high <- ifelse(GOI_subset_new$TAP_score >= "66.195","High","Low")
+  
+#####========= Read in study clinical data ==========######
+library(readxl)
+MS_metrics <- read_excel("Cancer Institute job/HLA supertypes/Data_analysis/Bulik-Sullivan dataset/MS_metrics.xlsx")
+
+# make IDa comparable to transcript data
+GOI_subset_new$ID <- gsub(" ","_",GOI_subset_new$ID)
+GOI_subset_new$ID <- tolower(GOI_subset_new$ID)
+
+# merge to create mastersheet
+Master_Bulik <- merge(GOI_subset_new,MS_metrics,by.x="ID", by.y="paper_sample_id",all.x.y=TRUE)
+
+# Epitopes by high and low TAP
+# Create new df with taking the median of one of the study measures (ignore this for now)
+Epitopes_df <- as.data.frame(Master_Bulik %>% rowwise() %>% mutate(Median_epitopes = median(c(peptides_q01,peptides_q05,peptides_q10))))
+
+# change the formatting of the HLA alleles slightly
+Epitopes_df$B1<- gsub(":","",Epitopes_df$B1)
+Epitopes_df$B2<- gsub(":","",Epitopes_df$B2)
+
+# assign supertypes by merging with the supertypes file
+HLA_prefix_to_Supertype <- read_csv("Cancer Institute job/HLA supertypes/Data_analysis/HLA_prefix_to_Supertype.csv")
+
+Epitopes_df <- merge(Epitopes_df,HLA_prefix_to_Supertype,by.x="B1",by.y="Allele",all.x = TRUE)
+names(Epitopes_df)[30] <- "B1_supertype" # rename
+
+Epitopes_df <- merge(Epitopes_df,HLA_prefix_to_Supertype,by.x="B2",by.y="Allele",all.x = TRUE)
+names(Epitopes_df)[32] <- "B2_supertype" # rename
+
+# Below we can categorize into B07 or non (binary) using ifelse statements
+# binary heterozygous supertype classifications
+Epitopes_df$Supertype_B07 <- ifelse(Epitopes_df$B1_supertype == "B07" | Epitopes_df$B2_supertype == "B07", "1", "0")
+
+# het hom classification
+Epitopes_df$B07_het_hom <- ifelse(Epitopes_df$B1_supertype == "B07" & Epitopes_df$B2_supertype == "B07", "Homozygous",
+                                  ifelse(Epitopes_df$B1_supertype == "B07" & Epitopes_df$B2_supertype != "B07", "Heterozygous",
+                                         ifelse(Epitopes_df$B1_supertype != "B07" & Epitopes_df$B2_supertype == "B07", "Heterozygous",
+                                                ifelse(Epitopes_df$B1_supertype != "B07" & Epitopes_df$B2_supertype != "B07", "Other","NA"))))
+
+
+# Select tumour samples only for this analysis
+tumour <- subset(Epitopes_df, Epitopes_df$`Tissue Specimen Type` == "Tumor")
+
+# make high and low classification
+tumour$TAP_high <- ifelse(as.numeric(tumour$TAP_score) >= 63.9275,"High","Low")
+table(tumour$TAP_high)
+
+# make four group classification
+tumour$TAP_B07 <- ifelse(tumour$TAP_high == "High" & tumour$Supertype_B07 == "1","TAP+ B07+",
+                               ifelse(tumour$TAP_high == "High" & tumour$Supertype_B07 == "0","TAP+ B07-",
+                                      ifelse(tumour$TAP_high == "Low" & tumour$Supertype_B07 == "1","TAP- B07+",
+                                             ifelse(tumour$TAP_high == "Low" & tumour$Supertype_B07 == "0","TAP- B07-","NA"))))
+
+# TAKE RELEVANT COLUMNS
+cols <- select(Epitopes_df, ID, TAP_high,Supertype_B07,B07_het_hom,TAP_score, `Tissue Specimen Type`)
+
+# Combine all mass-spec data for info on cell surface antigens
+setwd("C:/Users/bensi/OneDrive/Documents/Cancer Institute job/HLA supertypes/Data_analysis/Bulik-Sullivan dataset/Peptidomics")
+file.list <- list.files(pattern=".txt",recursive = TRUE)
+
+# read files
+combined <- lapply(file.list, function(i){
+  x = read_delim(i, "\t", escape_double = FALSE, trim_ws = TRUE)
+  x$file = i
+  x
+})
+combined[[2]] # check
+# Combine into data.frame
+Neoantigen = do.call("rbind.data.frame",combined)
+
+# Make a column for MS run no
+Neoantigen$Run <- ifelse(grepl("run_0.",Neoantigen$file),"0",
+                         ifelse(grepl("run_1.",Neoantigen$file),"1",
+                                ifelse(grepl("run_2.",Neoantigen$file),"2",
+                                       ifelse(grepl("run_3.",Neoantigen$file),"3",
+                                              ifelse(grepl("run_4.",Neoantigen$file),"4",
+                                                     ifelse(grepl("run_5.",Neoantigen$file),"5",
+                                                            ifelse(grepl("run_6.",Neoantigen$file),"6",
+                                                                   ifelse(grepl("run_7.",Neoantigen$file),"7",
+                                                                          ifelse(grepl("run_8.",Neoantigen$file),"8",
+                                                                                 ifelse(grepl("run_9.",Neoantigen$file),"9",
+                                                                                        ifelse(grepl("run_10.",Neoantigen$file),"10","Other")))))))))))
+table(Neoantigen$Run) # check
+
+# make new column for patient ID
+Neoantigen$ID <- sub("\\_ms_run_.*", "", Neoantigen$file)
+
+# Samples by run
+table(Neoantigen$Run, Neoantigen$ID)
+
+# write file:
+write.csv(Neoantigen, file = "Combined_MS_peptides_Bulik_Sullivan.csv")
+
+# subset by q val to included higher confidence peptides
+Neoantigen <- subset(Neoantigen, Neoantigen$`percolator q-value` <= 0.05)
+
+# count prolines per peptide
+# Count the number of 'P's in each element of string
+Neoantigen$Proline_count <- str_count(Neoantigen$sequence, "P")
+
+# P2 proline
+Neoantigen$P2_AA <- substring(Neoantigen$sequence, 2, 2) # get P2 AA
+Neoantigen$P2_Pro <- str_count(Neoantigen$P2_AA, "P") # count pro
+
+# Epitope count (rows will be aggregated later)
+Neoantigen$epitope_count <- 1
+
+# Peptide lengths
+Neoantigen$Peptide_length <- nchar(Neoantigen$sequence)
+
+# Proline proportion
+Neoantigen$Proline_prop <- Neoantigen$Proline_count/Neoantigen$Peptide_length
+
+# merge
+Neoantigen <- merge(Neoantigen, cols, by="ID",all.x=TRUE)
+
+# simplify data and aggregate
+Tumour_only <- select(Neoantigen, P2_Pro, epitope_count,`Tissue Specimen Type`,Supertype_B07,TAP_high,TAP_score )
+
+# remove benign
+Tumour_only <- subset(Tumour_only, Tumour_only$`Tissue Specimen Type` == "Tumor")
+
+# Split by median
+# Aggregate TAP score by patient and get true patient-level median
+test <- select(Neoantigen, ID, TAP_score)
+test <- aggregate(. ~ ID, data = test, FUN = median)
+median(na.omit(test$TAP_score)) # 66.195
+
+Tumour_only$TAP_high <- ifelse(Tumour_only$TAP_score >= 66.195, "High",
+                                ifelse(Tumour_only$TAP_score < 66.195, "Low","NA"))
+
+
+Tumour_only$TAP_B07 <- ifelse(Tumour_only$TAP_high == "High" & Tumour_only$Supertype_B07 == "1","TAP+ B07+",
+                               ifelse(Tumour_only$TAP_high == "High" & Tumour_only$Supertype_B07 == "0","TAP+ B07-",
+                                      ifelse(Tumour_only$TAP_high == "Low" & Tumour_only$Supertype_B07 == "1","TAP- B07+",
+                                             ifelse(Tumour_only$TAP_high == "Low" & Tumour_only$Supertype_B07 == "0","TAP- B07-","NA"))))
+
+# Tabulate
+xtab <- table(Tumour_only$TAP_B07,Tumour_only$P2_Pro)
+# shows prop test for all proportions
+prop.test(xtab)
+# performs pairwise prop tests across all groups
+pairwise_prop_test(xtab, p.adjust.method = "BH")
+# make into a dataframe
+xtab_df <- as.data.frame.matrix(xtab)#
+# store as df for ggplot
+proportions <- as.data.frame(BinomCI(xtab_df$`1`,(xtab_df$`0`+xtab_df$`1`),
+                                     conf.level = 0.95,
+                                     method = "clopper-pearson"))
+proportions$TAP_B07 <- rownames(xtab_df)# lost rownames
+proportions$Order <- c(1,3,2,4)
+
+# Make the plot with CIs
+proportions$TAP_high <- c("Low","Low","High","High")
+proportions$B07 <- c("Other","B07","Other","B07")
+
+# Plot barchart of proportions
+Fig.2g <- ggplot(proportions, aes(x=reorder(B07,Order), y=est*100, fill=reorder(TAP_high, Order))) +
+  geom_bar(position=position_dodge(), stat="identity",alpha=0.8) +
+  geom_errorbar(aes(ymin=lwr.ci*100, ymax=upr.ci*100), width=.2,position=position_dodge(.9))+
+  scale_fill_manual(values = c("#474F77","#3B2852")) + theme_classic() + ylab("Percentage of epitopes with P2 Pro") + xlab("")
+Fig.2g
+
+# save plot
+setwd("C:/Users/bensi/OneDrive/Documents/Cancer Institute job/HLA supertypes/For publication/HD Images/PDF figures")
+ggsave(
+  "TAP_exp_vs_presented_P2_Pro_B07_Non.pdf",
+  plot = Fig.2g,
+  path = NULL,
+  scale = 1,
+  width = 160,
+  height = 90,
+  units = "mm",
+  dpi = 300)
+
+#### Determining the median number of epitopes presented between groups ####
+# Simplify again
+Tumour_only2 <- select(Neoantigen, ID, P2_Pro, epitope_count,`Tissue Specimen Type`,Supertype_B07,TAP_high,TAP_score)
+neo_test <- subset(Neoantigen, Neoantigen$`percolator q-value` < 0.05) # how many significant peptides?
+
+# remove benign
+Tumour_only2 <- subset(Tumour_only2, Tumour_only2$`Tissue Specimen Type` == "Tumor")
+
+# Aggregate TAP score by patient and get true patient-level median
+test <- select(Neoantigen, ID, TAP_score)
+test <- aggregate(. ~ ID, data = test, FUN = median)
+median(na.omit(test$TAP_score)) # 66.195
+
+# TAP group
+Tumour_only2$TAP_high <- ifelse(Tumour_only2$TAP_score >= 66.195, "High",ifelse(Tumour_only2$TAP_score < 67.605, "Low","NA"))
+
+# Four groups
+Tumour_only2$TAP_B07 <- ifelse(Tumour_only2$TAP_high == "High" & Tumour_only2$Supertype_B07 == "1","TAP high B07+",
+                              ifelse(Tumour_only2$TAP_high == "High" & Tumour_only2$Supertype_B07 == "0","TAP high B07-",
+                                     ifelse(Tumour_only2$TAP_high == "Low" & Tumour_only2$Supertype_B07 == "1","TAP low B07+",
+                                            ifelse(Tumour_only2$TAP_high == "Low" & Tumour_only2$Supertype_B07 == "0","TAP low B07-","NA"))))
+
+# remove TAP high as it is not needed
+Tumour_only3 <- select(Tumour_only2, ID, P2_Pro, epitope_count,TAP_score)# Run
+
+# get total number of epitopes per patient
+result <- aggregate(. ~ ID, data = Tumour_only3, FUN = sum)
+
+# calculate proportion of proline epitopes per patient
+result$prop <- result$P2_Pro / result$epitope_count
+
+# merge with TAP_group status
+cols_merge <- select(Tumour_only2, ID, TAP_B07)
+result <- merge(result, cols_merge, by="ID", all.x=TRUE)
+result <- result[,-1] # drop ID column
+
+# now get the median number of epitopes by TAP/B07 group and SE of medians
+result_new <- aggregate(. ~ TAP_B07, data = result, FUN = median)
+SE_new <- aggregate(. ~ TAP_B07, data = result, FUN = function(x) se=std.error(x))
+SE_new <- SE_new[,c(1,3)]
+names(SE_new)[2] <- "SE"
+result_new <- merge(result_new, SE_new, by="TAP_B07")
+result_new$Order <- c(2,4,1,3)
+
+# For each group shows the median patient epitope count (tumour samples only)
+# Labels
+result_new$B07 <- c("Other","B07","Other","B07")
+result_new$TAP <- c("High","High","Low","Low")
+
+# boxplot
+# Ordering variable
+result$Order <- ifelse(result$TAP_B07 == "TAP high B07+",4,
+                       ifelse(result$TAP_B07 == "TAP low B07+",3,
+                              ifelse(result$TAP_B07 == "TAP high B07-",2,
+                                     ifelse(result$TAP_B07 == "TAP low B07-",1,NA))))
+
+
+Fig.2f <- ggplot(result, aes(x=reorder(result$TAP_B07,Order), y=epitope_count, fill=reorder(result$TAP_B07, Order))) +
+  geom_boxplot(alpha=0.75) +  scale_fill_manual(values = c("#474F77","#3B2852","#474F77","#3B2852")) + theme_classic() + ylab("Total presented eptiopes") + xlab("")
+Fig.2f + stat_compare_means()
+pairwise.wilcox.test(result$epitope_count, result$TAP_B07,p.adjust.method = "BH")
+
+# save plot as pdf
+setwd("C:/Users/bensi/OneDrive/Documents/Cancer Institute job/HLA supertypes/For publication/HD Images/PDF figures")
+ggsave(
+  "Total_epitopes_by_supertype_TAP_boxplot.pdf",
+  plot = x,
+  path = NULL,
+  scale = 1,
+  width = 180,
+  height = 120,
+  units = "mm",
+  dpi = 300)
+
+#### Does Proline change at non-P2 positions? #####
+
+# If we have a df with, Patient ID, Site (P1, P2, P3 etc) and proline count
+# Take columns we want (patient ID, sequence)
+Pro_sites <- Neoantigen[,c(1,12)]
+
+# create 9 new columns for Proline at each position:
+Pro_sites$P1_Pro <- str_count(substring(Pro_sites$sequence, 1, 1),"P")
+Pro_sites$P2_Pro <- str_count(substring(Pro_sites$sequence, 2, 2),"P")
+Pro_sites$P3_Pro <- str_count(substring(Pro_sites$sequence, 3, 3),"P")
+Pro_sites$P4_Pro <- str_count(substring(Pro_sites$sequence, 4, 4),"P")
+Pro_sites$P5_Pro <- str_count(substring(Pro_sites$sequence, 5, 5),"P")
+Pro_sites$P6_Pro <- str_count(substring(Pro_sites$sequence, 6, 6),"P")
+Pro_sites$P7_Pro <- str_count(substring(Pro_sites$sequence, 7, 7),"P")
+Pro_sites$P8_Pro <- str_count(substring(Pro_sites$sequence, 8, 8),"P")
+Pro_sites$P9_Pro <- str_count(substring(Pro_sites$sequence, 9, 9),"P")
+
+# Add arbitrary epitope count for aggregation later
+Pro_sites$Eptiope_count <- 1
+
+# remove sequence, don't need it
+Pro_sites <- Pro_sites[,-2]
+
+# aggregate (sum) by patient
+Pro_sites_Ag <- aggregate(. ~ ID, data = Pro_sites, FUN = sum)
+# select variables
+vars <- Pro_sites_Ag[,c(1,11)]
+
+# drop epitope count
+Pro_sites_Ag <- Pro_sites_Ag[,-11]
+
+# melt
+Pro_sites_melt <- melt(Pro_sites_Ag, id.vars="ID")
+
+# join epitope counts back on
+Pro_sites_melt_plus <- merge(Pro_sites_melt,vars, by="ID",all.x=TRUE)
+
+# calculate proportion of eptiopes with P in that position
+Pro_sites_melt_plus$Pro_prop <- Pro_sites_melt_plus$value/Pro_sites_melt_plus$Eptiope_count
+
+# Add supertype designation onto each patients
+Pro_sites_melt_plus <- merge(Pro_sites_melt_plus,cols,by="ID")
+
+# tumour only
+Pro_sites_melt_plus_t <- subset(Pro_sites_melt_plus, Pro_sites_melt_plus$`Tissue Specimen Type` == "Tumor")
+
+# Split groups again
+Tumour_only$TAP_high <- ifelse(Tumour_only$TAP_score >= 66.195, "High",ifelse(Tumour_only2$TAP_score < 66.195, "Low","NA"))
+
+# Four groups
+Pro_sites_melt_plus_t$TAP_B07 <- ifelse(Pro_sites_melt_plus_t$TAP_high == "High" & Pro_sites_melt_plus_t$Supertype_B07 == "1","TAP+ B07+",
+                               ifelse(Pro_sites_melt_plus_t$TAP_high == "High" & Pro_sites_melt_plus_t$Supertype_B07 == "0","TAP+ B07-",
+                                      ifelse(Pro_sites_melt_plus_t$TAP_high == "Low" & Pro_sites_melt_plus_t$Supertype_B07 == "1","TAP- B07+",
+                                             ifelse(Pro_sites_melt_plus_t$TAP_high == "Low" & Pro_sites_melt_plus_t$Supertype_B07 == "0","TAP- B07-","NA"))))
+
+
+# Heterozygous/homozygous classification
+Pro_sites_melt_plus_t$TAP_B07_hethom <- ifelse(Pro_sites_melt_plus_t$TAP_high == "High" & Pro_sites_melt_plus_t$B07_het_hom == "Homozygous","TAP high B07 Hom",
+                                        ifelse(Pro_sites_melt_plus_t$TAP_high == "High" & Pro_sites_melt_plus_t$B07_het_hom == "Heterozygous","TAP high B07 Het",
+                                               ifelse(Pro_sites_melt_plus_t$TAP_high == "High" & Pro_sites_melt_plus_t$B07_het_hom == "Other","TAP high Other",
+                                               ifelse(Pro_sites_melt_plus_t$TAP_high == "Low" & Pro_sites_melt_plus_t$B07_het_hom == "Homozygous","TAP- B07 Hom",
+                                                      ifelse(Pro_sites_melt_plus_t$TAP_high == "Low" & Pro_sites_melt_plus_t$B07_het_hom == "Heterozygous","TAP- B07 Het",
+                                                             ifelse(Pro_sites_melt_plus_t$TAP_high == "Low" & Pro_sites_melt_plus_t$B07_het_hom == "Other","TAP low Other","NA"))))))
+
+
+
+###### Final graph (Supplementary Fig.2e)
+#aggregate by TAP/B07 group and get the SEs
+# Take the proportion of Proline at each position for each patient
+Prosites_simple <- select(Pro_sites_melt_plus_t, Pro_prop, variable,TAP_B07)
+
+# Take the median across all patients per TAP group
+Prosites_by_TAP <- aggregate(. ~ TAP_B07 + variable, data = Prosites_simple, FUN = function(x) median = median(x))
+# calculate the standard error across all patients
+se <- aggregate(. ~ TAP_B07 + variable, data = Prosites_simple, FUN = function(x) se = std.error(x))
+names(se)[3] <- "SE"
+Pro_by_TAP <- merge(Prosites_by_TAP,se, by=c("TAP_B07","variable"))
+
+# order variable
+Pro_by_TAP$Order <- as.numeric(ifelse(Pro_by_TAP$TAP_B07 == "TAP- B07-", "1",
+                           ifelse(Pro_by_TAP$TAP_B07 == "TAP+ B07-", "2",
+                                  ifelse(Pro_by_TAP$TAP_B07 == "TAP- B07+", "3",
+                                         ifelse(Pro_by_TAP$TAP_B07 == "TAP+ B07-", "4","NA")))))
+# replot the graph
+Supp.Fig.2e <- ggplot(Pro_by_TAP,aes(x=variable, y=Pro_prop,group=reorder(TAP_B07,Order))) +
+  geom_bar(aes(fill=reorder(TAP_B07,Order)), stat="identity", position="dodge",width=0.75,alpha=0.8) +
+  geom_errorbar(aes(x=variable, ymin=Pro_prop-SE, ymax=Pro_prop+SE),width=.2,position=position_dodge(0.75)) + 
+  theme_classic() + ylab("Median proportion of eptiopes with P2 Pro")+ xlab("") +
+  scale_fill_manual(values = c("#474F77","#3B2852","#784661","#52283B"))+ #+ scale_x_discrete(labels= c("TAP Low B07-","TAP High B07-","TAP Low B07+","TAP High B07+")) +
+  theme(axis.text.x = element_text(angle = 45, hjust=1))
+Supp.Fig.2e 
+
+# save as PDF
+setwd("C:/Users/bensi/OneDrive/Documents/Cancer Institute job/HLA supertypes/For publication/HD Images/PDF figures")
+
+ggsave(
+  "Proline_prop_by_position_by_TAP_B07_status.pdf",
+  plot = Supp.Fig.2e ,
+  path = NULL,
+  scale = 1,
+  width = 210,
+  height = 150,
   units = "mm",
   dpi = 300)
